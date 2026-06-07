@@ -101,15 +101,36 @@ def _simulate_once(angle_deg, params):
 
         return [vx, vz, ax, az, dm_w, dm_a]
 
+    def water_burnout(t, y):
+        return y[4] - 1e-7
+    water_burnout.terminal  = False
+    water_burnout.direction = -1
+
     def hit_ground(t, y):
         return y[1] if t > 0.05 else 1.0
     hit_ground.terminal  = True
     hit_ground.direction = -1
 
-    sol = solve_ivp(deriv, [0, 30], y0, events=hit_ground,
+    sol = solve_ivp(deriv, [0, 30], y0, events=[water_burnout, hit_ground],
                     method='RK45', max_step=5e-3, rtol=1e-7, atol=1e-10)
     x, z = sol.y[0], sol.y[1]
-    return float(x[-1]), float(z.max()), sol.t, x, z
+
+    # Estado no instante de esgotamento da água
+    if sol.y_events[0].shape[0] > 0:
+        yb   = sol.y_events[0][0]
+        t_b  = float(sol.t_events[0][0])
+        v_b  = float(np.hypot(yb[2], yb[3]))
+        incl = float(np.degrees(np.arctan2(yb[3], yb[2])))
+    else:
+        t_b = v_b = incl = float('nan')
+
+    burnout = {
+        'p_burn_gauge': p_burn - P_ATM,   # Pa manométrico
+        't_burn':       t_b,              # s
+        'v_burn':       v_b,              # m/s
+        'incl_burn':    incl,             # graus
+    }
+    return float(x[-1]), float(z.max()), sol.t, x, z, burnout
 
 
 def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
@@ -137,12 +158,17 @@ def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
                              bounds=(lo, hi), method='bounded',
                              options={'xatol': 0.05})
     ang_opt = float(res.x)
-    rng_opt, ap_opt, t_opt, x_opt, z_opt = _simulate_once(ang_opt, params)
+    rng_opt, ap_opt, t_opt, x_opt, z_opt, b = _simulate_once(ang_opt, params)
 
     return {
         'angle_deg':   round(ang_opt, 2),
         'range_m':     round(rng_opt, 2),
         'apogee_m':    round(ap_opt, 2),
+        'p_burnout_bar':    round(b['p_burn_gauge'] / 1e5, 2),
+        'p_burnout_psi':    round(b['p_burn_gauge'] / PSI_TO_PA, 1),
+        'v_burnout_ms':     round(b['v_burn'], 2),
+        'incl_burnout_deg': round(b['incl_burn'], 2),
+        't_burnout_ms':     round(b['t_burn'] * 1000, 1),
         'sweep_angles': angles,
         'sweep_ranges': ranges,
         'traj_x':      x_opt,
@@ -163,15 +189,15 @@ with st.form("params"):
 
     col1, col2 = st.columns(2)
     with col1:
-        V_bottle_L  = st.number_input("Volume da garrafa (L)",   value=2.0)
-        V_water_L   = st.number_input("Volume de água (L)",      value=0.7)
-        D_nozzle_mm = st.number_input("Diâmetro do bocal (mm)",  value=14.2)
-        D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=104.0)
-        m_dry_g     = st.number_input("Massa seca (g)",          value=130.0)
+        V_bottle_L  = st.number_input("Volume da garrafa (L)",   value=6.0)
+        V_water_L   = st.number_input("Volume de água (L)",      value=2.0)
+        D_nozzle_mm = st.number_input("Diâmetro do bocal (mm)",  value=10)
+        D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=106.0)
+        m_dry_g     = st.number_input("Massa seca (g)",          value=580.0)
     with col2:
-        Cd          = st.number_input("Cd do corpo",             value=0.5)
-        P0_psi      = st.number_input("Pressão inicial (PSI)",   value=87.0)
-        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.97)
+        Cd          = st.number_input("Cd do corpo",             value=0.35)
+        P0_psi      = st.number_input("Pressão inicial (PSI)",   value=200.0)
+        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.77)
         L_tube_cm   = st.number_input("Comprimento do tubo (cm)", value=100.0)
 
     submitted = st.form_submit_button("Calcular ângulo ótimo", type="primary",
@@ -195,6 +221,16 @@ if submitted:
         c1.metric("Ângulo ótimo", f"{r['angle_deg']}°")
         c2.metric("Alcance",      f"{r['range_m']} m")
         c3.metric("Apogeu",       f"{r['apogee_m']} m")
+
+        st.markdown("**No esgotamento da água (burnout)**")
+        b1, b2, b3, b4 = st.columns(4)
+        b1.metric("Pressão interna", f"{r['p_burnout_bar']} bar",
+                  help=f"{r['p_burnout_psi']} PSI manométrico")
+        b2.metric("Velocidade", f"{r['v_burnout_ms']} m/s")
+        b3.metric("Inclinação", f"{r['incl_burnout_deg']}°",
+                  delta=f"{round(r['incl_burnout_deg'] - r['angle_deg'], 1)}° vs lançamento",
+                  delta_color="off")
+        b4.metric("Instante", f"{r['t_burnout_ms']} ms")
 
         st.subheader("Visualização")
         fig, axes = plt.subplots(1, 2, figsize=(11, 4))
