@@ -121,14 +121,18 @@ def _simulate_once(angle_deg, params):
         t_b  = float(sol.t_events[0][0])
         v_b  = float(np.hypot(yb[2], yb[3]))
         incl = float(np.degrees(np.arctan2(yb[3], yb[2])))
+        x_b  = float(yb[0])
+        z_b  = float(yb[1])
     else:
-        t_b = v_b = incl = float('nan')
+        t_b = v_b = incl = x_b = z_b = float('nan')
 
     burnout = {
         'p_burn_gauge': p_burn - P_ATM,   # Pa manométrico
         't_burn':       t_b,              # s
         'v_burn':       v_b,              # m/s
         'incl_burn':    incl,             # graus
+        'x_burn':       x_b,              # m
+        'z_burn':       z_b,              # m
     }
     return float(x[-1]), float(z.max()), sol.t, x, z, burnout
 
@@ -164,13 +168,12 @@ def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
         'angle_deg':   round(ang_opt, 2),
         'range_m':     round(rng_opt, 2),
         'apogee_m':    round(ap_opt, 2),
-        'p_burnout_bar':    round(b['p_burn_gauge'] / 1e5, 2),
         'p_burnout_psi':    round(b['p_burn_gauge'] / PSI_TO_PA, 1),
-        'v_burnout_ms':     round(b['v_burn'], 2),
+        'v_burnout_kmh':    round(b['v_burn'] * 3.6, 1),
         'incl_burnout_deg': round(b['incl_burn'], 2),
-        't_burnout_ms':     round(b['t_burn'] * 1000, 1),
-        'sweep_angles': angles,
-        'sweep_ranges': ranges,
+        't_burnout_s':      round(b['t_burn'], 3),
+        'x_burnout_m':      b['x_burn'],
+        'z_burnout_m':      b['z_burn'],
         'traj_x':      x_opt,
         'traj_z':      z_opt,
     }
@@ -181,7 +184,7 @@ def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
 # ============================================================
 st.set_page_config(page_title="Foguete PET", page_icon="🚀", layout="centered")
 
-st.title("🚀 Simulador Cunha de Foguete PET")
+st.title("🚀 Simulador de Foguete PET")
 st.caption("Calcula o ângulo de lançamento ótimo para o maior alcance horizontal.")
 
 with st.form("params"):
@@ -195,9 +198,9 @@ with st.form("params"):
         D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=106.0)
         m_dry_g     = st.number_input("Massa seca (g)",          value=580.0)
     with col2:
-        Cd          = st.number_input("Cd do corpo",             value=0.4)
+        Cd          = st.number_input("Cd do corpo",             value=0.35)
         P0_psi      = st.number_input("Pressão inicial (PSI)",   value=200.0)
-        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.8)
+        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.77)
         L_tube_cm   = st.number_input("Comprimento do tubo (cm)", value=100.0)
 
     submitted = st.form_submit_button("Simular Lançamento", type="primary",
@@ -224,35 +227,32 @@ if submitted:
 
         st.markdown("**No esgotamento da água (burnout)**")
         b1, b2, b3, b4 = st.columns(4)
-        b1.metric("Pressão interna", f"{r['p_burnout_bar']} bar",
-                  help=f"{r['p_burnout_psi']} PSI manométrico")
-        b2.metric("Velocidade", f"{r['v_burnout_ms']} m/s")
+        b1.metric("Pressão interna", f"{r['p_burnout_psi']} PSI")
+        b2.metric("Velocidade", f"{r['v_burnout_kmh']} km/h")
         b3.metric("Inclinação", f"{r['incl_burnout_deg']}°",
                   delta=f"{round(r['incl_burnout_deg'] - r['angle_deg'], 1)}° vs lançamento",
                   delta_color="off")
-        b4.metric("Instante", f"{r['t_burnout_ms']} ms")
+        b4.metric("Instante", f"{r['t_burnout_s']} s")
 
-        st.subheader("Visualização")
-        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        st.subheader("Trajetória")
+        fig, ax = plt.subplots(figsize=(9, 5))
+        ax.plot(r['traj_x'], r['traj_z'], color='tab:blue', lw=2)
+        ax.fill_between(r['traj_x'], 0, r['traj_z'], alpha=0.1, color='tab:blue')
 
-        axes[0].plot(r['sweep_angles'], r['sweep_ranges'],
-                     color='tab:orange', lw=2)
-        axes[0].axvline(r['angle_deg'], color='red', ls='--', alpha=0.6)
-        axes[0].scatter([r['angle_deg']], [r['range_m']],
-                        color='red', s=80, zorder=5)
-        axes[0].set_xlabel('Ângulo de lançamento (°)')
-        axes[0].set_ylabel('Alcance (m)')
-        axes[0].set_title('Alcance × ângulo')
-        axes[0].grid(True, alpha=0.3)
+        # Marca o momento em que a água se esgota
+        ax.scatter([r['x_burnout_m']], [r['z_burnout_m']],
+                   color='red', s=90, zorder=5)
+        ax.annotate(f"água esgota\n(t = {r['t_burnout_s']} s)",
+                    xy=(r['x_burnout_m'], r['z_burnout_m']),
+                    xytext=(20, 28), textcoords='offset points',
+                    fontsize=9, color='red',
+                    arrowprops=dict(arrowstyle='->', color='red'))
 
-        axes[1].plot(r['traj_x'], r['traj_z'], color='tab:blue', lw=2)
-        axes[1].fill_between(r['traj_x'], 0, r['traj_z'],
-                             alpha=0.1, color='tab:blue')
-        axes[1].set_xlabel('x (m)')
-        axes[1].set_ylabel('z (m)')
-        axes[1].set_title(f"Trajetória ótima @ {r['angle_deg']}°")
-        axes[1].grid(True, alpha=0.3)
-        axes[1].set_aspect('equal', 'box')
+        ax.set_xlabel('x (m)')
+        ax.set_ylabel('z (m)')
+        ax.set_title(f"Trajetória ótima @ {r['angle_deg']}°")
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal', 'box')
 
         plt.tight_layout()
         st.pyplot(fig)
