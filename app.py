@@ -189,15 +189,15 @@ with st.form("params"):
 
     col1, col2 = st.columns(2)
     with col1:
-        V_bottle_L  = st.number_input("Volume da garrafa (L)",   value=2.0)
-        V_water_L   = st.number_input("Volume de água (L)",      value=0.7)
-        D_nozzle_mm = st.number_input("Diâmetro do bocal (mm)",  value=14.2)
-        D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=104.0)
-        m_dry_g     = st.number_input("Massa seca (g)",          value=130.0)
+        V_bottle_L  = st.number_input("Volume da garrafa (L)",   value=6.0)
+        V_water_L   = st.number_input("Volume de água (L)",      value=2.0)
+        D_nozzle_mm = st.number_input("Diâmetro do bocal (mm)",  value=10)
+        D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=106.0)
+        m_dry_g     = st.number_input("Massa seca (g)",          value=580.0)
     with col2:
-        Cd          = st.number_input("Cd do corpo",             value=0.5)
-        P0_psi      = st.number_input("Pressão inicial (PSI)",   value=87.0)
-        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.97)
+        Cd          = st.number_input("Cd do corpo",             value=0.4)
+        P0_psi      = st.number_input("Pressão inicial (PSI)",   value=200.0)
+        Cd_nozzle   = st.number_input("Cd do bocal",             value=0.8)
         L_tube_cm   = st.number_input("Comprimento do tubo (cm)", value=100.0)
 
     submitted = st.form_submit_button("Simular Lançamento", type="primary",
