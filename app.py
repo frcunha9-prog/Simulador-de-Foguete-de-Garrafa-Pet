@@ -24,9 +24,10 @@ PSI_TO_PA = 6894.757
 # ============================================================
 # Núcleo de simulação
 # ============================================================
-def _simulate_once(angle_deg, params):
-    """Simula uma trajetória e retorna (alcance, apogeu, t, x, z)."""
-    (V_bottle, V_water, D_nozzle, D_body, m_dry,
+def _simulate_once(angle_deg, D_nozzle, params, t_end=40.0,
+                   max_step=5e-3, rtol=1e-7, atol=1e-10):
+    """Simula uma trajetória e retorna (alcance, apogeu, t, x, z, burnout)."""
+    (V_bottle, V_water, D_body, m_dry,
      Cd, P0, Cd_nozzle, L_tube) = params
 
     A_throat = np.pi * (D_nozzle / 2) ** 2
@@ -111,8 +112,8 @@ def _simulate_once(angle_deg, params):
     hit_ground.terminal  = True
     hit_ground.direction = -1
 
-    sol = solve_ivp(deriv, [0, 30], y0, events=[water_burnout, hit_ground],
-                    method='RK45', max_step=5e-3, rtol=1e-7, atol=1e-10)
+    sol = solve_ivp(deriv, [0, t_end], y0, events=[water_burnout, hit_ground],
+                    method='RK45', max_step=max_step, rtol=rtol, atol=atol)
     x, z = sol.y[0], sol.y[1]
 
     # Estado no instante de esgotamento da água
@@ -137,13 +138,19 @@ def _simulate_once(angle_deg, params):
     return float(x[-1]), float(z.max()), sol.t, x, z, burnout
 
 
-def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
-               m_dry_g, Cd, P0_psi, Cd_nozzle=0.97, L_tube_cm=100.0):
-    """Encontra o ângulo ótimo e devolve resultados + curva alcance×ângulo."""
+def optimize_rocket(V_bottle_L, V_water_L, D_body_mm, m_dry_g, Cd, P0_psi,
+                    Cd_nozzle=0.97, L_tube_cm=100.0,
+                    D_nozzle_min_mm=4.0, D_nozzle_max_mm=21.7):
+    """Encontra o diâmetro de bocal E o ângulo que maximizam o alcance.
+
+    O bocal e o ângulo são acoplados (bocal menor pede ângulo maior), então
+    a otimização é aninhada: para cada diâmetro candidato encontra-se o ângulo
+    ótimo (Brent), e por fora otimiza-se o diâmetro (Brent). A busca usa
+    integração rápida; uma simulação precisa final gera o resultado e o gráfico.
+    """
     params = (
         V_bottle_L * 1e-3,
         V_water_L  * 1e-3,
-        D_nozzle_mm * 1e-3,
         D_body_mm   * 1e-3,
         m_dry_g     * 1e-3,
         Cd,
@@ -152,19 +159,41 @@ def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
         L_tube_cm * 1e-2,
     )
 
-    # Varredura grosseira + refino com Brent
-    angles = np.arange(15.0, 75.5, 1.0)
-    ranges = np.array([_simulate_once(a, params)[0] for a in angles])
-    j      = int(np.argmax(ranges))
-    lo     = angles[max(j - 3, 0)]
-    hi     = angles[min(j + 3, len(angles) - 1)]
-    res    = minimize_scalar(lambda a: -_simulate_once(a, params)[0],
-                             bounds=(lo, hi), method='bounded',
-                             options={'xatol': 0.05})
-    ang_opt = float(res.x)
-    rng_opt, ap_opt, t_opt, x_opt, z_opt, b = _simulate_once(ang_opt, params)
+    # Precisões: rápida para a busca, fina para o resultado final
+    FAST    = dict(max_step=0.03, rtol=1e-5, atol=1e-8)
+    PRECISE = dict(max_step=5e-3, rtol=1e-7, atol=1e-10)
+
+    def range_fast(angle_deg, D_mm):
+        try:
+            r = _simulate_once(angle_deg, D_mm * 1e-3, params, **FAST)[0]
+        except Exception:
+            return -1.0
+        return r if np.isfinite(r) else -1.0
+
+    def best_range_for_nozzle(D_mm):
+        res = minimize_scalar(lambda a: -range_fast(a, D_mm),
+                              bounds=(18.0, 70.0), method='bounded',
+                              options={'xatol': 0.2})
+        return -float(res.fun)
+
+    # Otimização externa: diâmetro do bocal
+    resD = minimize_scalar(lambda D: -best_range_for_nozzle(D),
+                           bounds=(D_nozzle_min_mm, D_nozzle_max_mm),
+                           method='bounded', options={'xatol': 0.1})
+    D_opt_mm = float(resD.x)
+
+    # Ângulo ótimo no bocal ótimo (refino)
+    resa = minimize_scalar(lambda a: -range_fast(a, D_opt_mm),
+                           bounds=(18.0, 70.0), method='bounded',
+                           options={'xatol': 0.05})
+    ang_opt = float(resa.x)
+
+    # Simulação precisa final no ponto ótimo
+    rng_opt, ap_opt, t_opt, x_opt, z_opt, b = _simulate_once(
+        ang_opt, D_opt_mm * 1e-3, params, **PRECISE)
 
     return {
+        'nozzle_mm':   round(D_opt_mm, 2),
         'angle_deg':   round(ang_opt, 2),
         'range_m':     round(rng_opt, 2),
         'apogee_m':    round(ap_opt, 2),
@@ -185,7 +214,8 @@ def best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
 st.set_page_config(page_title="Foguete PET", page_icon="🚀", layout="centered")
 
 st.title("🚀 Simulador de Foguete PET")
-st.caption("Calcula o ângulo de lançamento ótimo para o maior alcance horizontal.")
+st.caption("Calcula o diâmetro de bocal e o ângulo de lançamento ótimos "
+           "para o maior alcance horizontal.")
 
 with st.form("params"):
     st.subheader("Parâmetros do foguete")
@@ -194,7 +224,6 @@ with st.form("params"):
     with col1:
         V_bottle_L  = st.number_input("Volume da garrafa (L)",   value=6.0)
         V_water_L   = st.number_input("Volume de água (L)",      value=2.0)
-        D_nozzle_mm = st.number_input("Diâmetro do bocal (mm)",  value=10)
         D_body_mm   = st.number_input("Diâmetro do foguete (mm)", value=106.0)
         m_dry_g     = st.number_input("Massa seca (g)",          value=580.0)
     with col2:
@@ -203,27 +232,28 @@ with st.form("params"):
         Cd_nozzle   = st.number_input("Cd do bocal",             value=0.77)
         L_tube_cm   = st.number_input("Comprimento do tubo (cm)", value=100.0)
 
-    submitted = st.form_submit_button("Simular Lançamento", type="primary",
-                                      use_container_width=True)
+    submitted = st.form_submit_button("Calcular bocal e ângulo ótimos",
+                                      type="primary", use_container_width=True)
 
 if submitted:
     if V_water_L >= V_bottle_L:
         st.error("⚠️ O volume de água precisa ser menor que o volume da garrafa.")
     else:
-        with st.spinner("Simulando trajetórias..."):
+        with st.spinner("Otimizando bocal e ângulo (alguns segundos)..."):
             try:
-                r = best_angle(V_bottle_L, V_water_L, D_nozzle_mm, D_body_mm,
-                               m_dry_g, Cd, P0_psi, Cd_nozzle, L_tube_cm)
+                r = optimize_rocket(V_bottle_L, V_water_L, D_body_mm,
+                                    m_dry_g, Cd, P0_psi, Cd_nozzle, L_tube_cm)
             except Exception as e:
                 st.error(f"Erro na simulação: {e}")
                 st.stop()
 
         st.success("Resultado calculado!")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Ângulo ótimo", f"{r['angle_deg']}°")
-        c2.metric("Alcance",      f"{r['range_m']} m")
-        c3.metric("Apogeu",       f"{r['apogee_m']} m")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Bocal ótimo",  f"{r['nozzle_mm']} mm")
+        c2.metric("Ângulo ótimo", f"{r['angle_deg']}°")
+        c3.metric("Alcance",      f"{r['range_m']} m")
+        c4.metric("Apogeu",       f"{r['apogee_m']} m")
 
         st.markdown("**No esgotamento da água (burnout)**")
         b1, b2, b3, b4 = st.columns(4)
@@ -239,18 +269,28 @@ if submitted:
         ax.plot(r['traj_x'], r['traj_z'], color='tab:blue', lw=2)
         ax.fill_between(r['traj_x'], 0, r['traj_z'], alpha=0.1, color='tab:blue')
 
-        # Marca o momento em que a água se esgota
-        ax.scatter([r['x_burnout_m']], [r['z_burnout_m']],
-                   color='red', s=90, zorder=5)
-        ax.annotate(f"água esgota\n(t = {r['t_burnout_s']} s)",
-                    xy=(r['x_burnout_m'], r['z_burnout_m']),
-                    xytext=(20, 28), textcoords='offset points',
-                    fontsize=9, color='red',
-                    arrowprops=dict(arrowstyle='->', color='red'))
+        # Marca o momento em que a água se esgota (se o evento ocorreu)
+        if np.isfinite(r['x_burnout_m']):
+            xb, zb = r['x_burnout_m'], r['z_burnout_m']
+            ax.scatter([xb], [zb], color='red', s=90, zorder=5)
+
+            # Seta tangente = inclinação real do foguete (direção da velocidade)
+            ang_b  = np.radians(r['incl_burnout_deg'])
+            L_arrow = 0.16 * max(r['range_m'], 1.0)
+            ax.annotate('',
+                        xy=(xb + L_arrow * np.cos(ang_b), zb + L_arrow * np.sin(ang_b)),
+                        xytext=(xb, zb),
+                        arrowprops=dict(arrowstyle='-|>', color='red', lw=2.2),
+                        zorder=6)
+            ax.annotate(f"água esgota (t = {r['t_burnout_s']} s)\n"
+                        f"inclinação real {r['incl_burnout_deg']}°",
+                        xy=(xb, zb), xytext=(45, -18), textcoords='offset points',
+                        fontsize=9, color='red',
+                        arrowprops=dict(arrowstyle='->', color='red'))
 
         ax.set_xlabel('x (m)')
         ax.set_ylabel('z (m)')
-        ax.set_title(f"Trajetória ótima @ {r['angle_deg']}°")
+        ax.set_title(f"Trajetória ótima — bocal {r['nozzle_mm']} mm @ {r['angle_deg']}°")
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal', 'box')
 
