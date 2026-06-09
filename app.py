@@ -140,7 +140,7 @@ def _simulate_once(angle_deg, D_nozzle, params, t_end=40.0,
 
 def optimize_rocket(V_bottle_L, V_water_L, D_body_mm, m_dry_g, Cd, P0_psi,
                     Cd_nozzle=0.97, L_tube_cm=100.0,
-                    D_nozzle_min_mm=4.0, D_nozzle_max_mm=21.7):
+                    D_nozzle_min_mm=1.0, D_nozzle_max_mm=21.7):
     """Encontra o diâmetro de bocal E o ângulo que maximizam o alcance.
 
     O bocal e o ângulo são acoplados (bocal menor pede ângulo maior), então
